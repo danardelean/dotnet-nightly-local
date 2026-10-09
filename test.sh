@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+# Tests for install.sh that need no Microsoft download: the pure functions, then end-to-end runs on a
+# fake SDK folder (a fake `dotnet` that logs its calls) with the real RC1-band manifests from nuget.org, and the feed
+# discovery from dotnet/maui's NuGet.config. Needs curl, unzip, perl, python3 and access to nuget.org and GitHub.
+#   ./test.sh
+set -uo pipefail
+SCRIPT="${1:-$(dirname "$0")/install.sh}"
+SCRIPT="$(cd "$(dirname "$SCRIPT")" && pwd)/$(basename "$SCRIPT")"
+pass=0; fail=0
+ok()   { pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
+bad()  { fail=$((fail+1)); printf '  FAIL %s\n       got: %s\n' "$1" "$2"; }
+check() { # name expected actual
+  if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (expected: $2)" "$3"; fi
+}
+
+echo "== functions"
+# shellcheck source=/dev/null
+source "$SCRIPT"; set +e   # the script sets -e when sourced
+check "band rc.2"        "11.0.100-rc.2"      "$(band_of 11.0.100-rc.2.26504.105)"
+check "band rtm"         "11.0.100"           "$(band_of 11.0.100-rtm.26480.113)"
+check "band preview"     "11.0.100-preview.7" "$(band_of 11.0.100-preview.7.26380.1)"
+check "band alpha 12"    "12.0.100-alpha.1"   "$(band_of 12.0.100-alpha.1.26480.102)"
+check "band release"     "11.0.100"           "$(band_of 11.0.100)"
+check "band 2xx"         "11.0.200-rc.1"      "$(band_of 11.0.201-rc.1.26500.1)"
+check "label rc.2"       "rc.2"               "$(label_of 11.0.100-rc.2)"
+check "label none"       ""                   "$(label_of 11.0.100)"
+check "major"            "11"                 "$(major_of 11.0.100-rc.2.26504.105)"
+check "maui branch rc.2"   "release/11.0.1xx-rc2"      "$(maui_branch_for 11.0.100-rc.2)"
+check "maui branch preview" "release/11.0.1xx-preview7" "$(maui_branch_for 11.0.100-preview.7)"
+check "maui branch release" "net11.0"                  "$(maui_branch_for 11.0.100)"
+check "maui branch alpha"  "main"                      "$(maui_branch_for 12.0.100-alpha.1)"
+# an alpha band also reads the previous major's release branches (network: git ls-remote dotnet/maui); the newest
+# release branch is pinned to what exists today
+check "maui branches rc.2: the band's branch only" "release/11.0.1xx-rc2" "$(maui_branches_for 11.0.100-rc.2 | tr '\n' ' ' | sed 's/ $//')"
+check "maui branches alpha: main + previous major"  "main net11.0 release/11.0.1xx-rc2" "$(maui_branches_for 12.0.100-alpha.1 | tr '\n' ' ' | sed 's/ $//')"
+check "flat nuget.org"   "https://api.nuget.org/v3-flatcontainer" "$(flat https://api.nuget.org/v3/index.json)"
+check "flat dnceng"      "https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet11/nuget/v3/flat2" "$(flat https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet11/nuget/v3/index.json)"
+check "pick rc over preview" "11.0.0-rc.2.26504.105	B" "$(printf '11.0.0-preview.7.26471.7\tA\n11.0.0-rc.2.26504.105\tB\n11.0.0-rc.2.26480.1\tC\n' | pick_highest)"
+check "pick core"        "27.0.12211-net11-rc.2	B" "$(printf '26.5.12253-net11-rc.2\tA\n27.0.12211-net11-rc.2\tB\n27.0.12195-net11-rc.2\tC\n' | pick_highest)"
+check "pick release > rc" "11.0.0	B" "$(printf '11.0.0-rc.2.26504.105\tA\n11.0.0\tB\n' | pick_highest)"
+check "pick build number" "11.0.100-rc.2.26502.119	B" "$(printf '11.0.100-rc.2.26425.128\tA\n11.0.100-rc.2.26502.119\tB\n' | pick_highest)"
+check "pick empty"       ""                   "$(printf '' | pick_highest)"
+check "newest public .NET 10 runtime (nuget.org)" "10.0." "$(newest_public_runtime 10 | cut -c1-5)"
+check "newest public .NET 10 runtime is a release" "" "$(newest_public_runtime 10 | grep -- - || true)"
+# a major with no release yet (the previous major of an alpha SDK): empty, and not a pipefail exit
+check "no public .NET 99 runtime: empty, no failure" "ok:" "$(r="$(newest_public_runtime 99)" && echo "ok:$r")"
+
+echo "== channels from the builds table (network: GitHub; aka.ms versions may be unreachable)"
+channels="$("$SCRIPT" --list-channels 2>&1)"
+echo "$channels" | sed 's/^/     | /'
+check "header"            "channel              current daily SDK" "$(echo "$channels" | head -1)"
+candidates="$(channel_candidates)"
+check "candidates: table channel"        "1" "$(echo "$candidates" | grep -c -x '11.0.1xx-rc2')"
+check "candidates: Arcade name, next major" "1" "$(echo "$candidates" | grep -c -x '12.0.1xx')"
+check "candidates: Arcade name, preview"  "1" "$(echo "$candidates" | grep -c -x '11.0.1xx-preview7')"
+check "candidates: no old majors"         "0" "$(echo "$candidates" | grep -c -E '^[0-9]\.')"
+check "rc2 channel listed" "1" "$(echo "$channels" | grep -c '^11.0.1xx-rc2 ')"
+check "main channel listed" "1" "$(echo "$channels" | grep -c '^11.0.1xx ')"
+check "channel names look like channels" "" "$(echo "$channels" | tail -n +2 | cut -d' ' -f1 | grep -v -E '^[0-9]+\.[0-9]+\.[0-9]xx(-[a-z0-9]+)?$' || true)"
+check "versions are versions or ?, never a web page" "" "$(echo "$channels" | tail -n +2 | awk '{print $2}' | grep -v -E '^(\?|[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?)$' || true)"
+check "channel_version: unknown channel gives ?" "?" "$(channel_version no.such.channel)"
+
+echo "== channel required"
+msg="$("$SCRIPT" --no-global-json 2>&1)"; rc=$?
+check "no channel: exit 1" "1" "$rc"
+check "no channel: points at --list-channels" "1" "$(echo "$msg" | grep -c -- '--channel .*--list-channels')"
+check "no dated default anywhere" "" "$(grep -n -E '[0-9]+\.[0-9]+\.[0-9]{3}[-.][a-z0-9.]*[0-9]{5}' "$SCRIPT" || true)"
+
+echo "== compat manifest patch"
+t="$(mktemp -d)"
+mkdir -p "$t/sdk-manifests/11.0.100-rc.2/microsoft.net.workload.mono.toolchain.net10/11.0.100-rc.2.1"
+cat > "$t/sdk-manifests/11.0.100-rc.2/microsoft.net.workload.mono.toolchain.net10/11.0.100-rc.2.1/WorkloadManifest.json" <<'JSON'
+{ "version": "10.0.99", "packs": { "Microsoft.NETCore.App.Runtime.Mono.android-x64": { "kind": "framework", "version": "10.0.99" }, "Microsoft.NET.Runtime.MonoAOTCompiler.Task": { "kind": "Sdk", "version": "10.0.99" } } }
+JSON
+out="$(patch_compat_manifests "$t" 10 10.0.12)"
+check "patch logs"       "  compat manifest microsoft.net.workload.mono.toolchain.net10: .NET 10.0.99 -> 10.0.12" "$out"
+check "patch applied"    "0" "$(grep -c 10.0.99 "$t/sdk-manifests/11.0.100-rc.2/microsoft.net.workload.mono.toolchain.net10/11.0.100-rc.2.1/WorkloadManifest.json")"
+check "patch count"      "3" "$(grep -o 10.0.12 "$t/sdk-manifests/11.0.100-rc.2/microsoft.net.workload.mono.toolchain.net10/11.0.100-rc.2.1/WorkloadManifest.json" | wc -l | tr -d ' ')"
+out="$(patch_compat_manifests "$t" 10 10.0.12)"
+check "patch idempotent" "" "$out"
+rm -rf "${t:?}"
+
+echo "== end to end on a fake SDK folder (manifests from nuget.org, RC1 band)"
+root="$(mktemp -d)"; cd "$root"
+SDKV="11.0.100-rc.1.26451.107"
+mkdir -p ".dotnet/sdk/$SDKV" .dotnet/sdk/11.0.100-preview.7.26380.1 .dotnet/shared/Microsoft.NETCore.App/11.0.0-rc.1.1 .dotnet/shared/Microsoft.NETCore.App/11.0.0-preview.7.1 .dotnet/host/fxr/11.0.0-rc.1.1
+printf 'Microsoft.NET.Sdk.Android\nMicrosoft.NET.Sdk.iOS\nMicrosoft.NET.Sdk.Maui\nMicrosoft.NET.Workload.Mono.ToolChain.Current\nMicrosoft.NET.Workload.Mono.ToolChain.net10\nnot.a.real.manifest\n' > ".dotnet/sdk/$SDKV/KnownWorkloadManifests.txt"
+# stale baseline manifest in an older band folder, as a daily SDK ships it
+mkdir -p .dotnet/sdk-manifests/11.0.100-preview.6/microsoft.net.sdk.ios/26.5.11720-net11-p6
+echo '{ "version": "26.5.11720-net11-p6" }' > .dotnet/sdk-manifests/11.0.100-preview.6/microsoft.net.sdk.ios/26.5.11720-net11-p6/WorkloadManifest.json
+# a pin left by an earlier install
+mkdir -p .dotnet/metadata/workloads/11.0.100-rc.1/InstallState && echo '{}' > .dotnet/metadata/workloads/11.0.100-rc.1/InstallState/default.json
+# an older version of a manifest in the band folder, as a previous run leaves it: the update must replace it
+mkdir -p .dotnet/sdk-manifests/11.0.100-rc.1/microsoft.net.sdk.ios/26.5.12000-net11-rc.1
+echo '{ "version": "26.5.12000-net11-rc.1" }' > .dotnet/sdk-manifests/11.0.100-rc.1/microsoft.net.sdk.ios/26.5.12000-net11-rc.1/WorkloadManifest.json
+# fake dotnet: logs every call, answers `workload list`
+cat > .dotnet/dotnet <<'SH'
+#!/usr/bin/env bash
+echo "$PWD :: $*" >> "$FAKE_LOG"
+case "$1 $2" in "workload list") echo "Installed Workload Id    Manifest Version"; echo "maui-android             fake" ;; esac
+SH
+chmod +x .dotnet/dotnet
+export FAKE_LOG="$root/dotnet-calls.log"; : > "$FAKE_LOG"
+# an old global.json pinning another version, which must not disturb the run
+echo '{ "sdk": { "version": "11.0.100-preview.7.26380.1", "paths": [ ".dotnet", "$host$" ] } }' > global.json
+
+run1="$("$SCRIPT" --skip-sdk --no-default-feeds --maui-branch none --feeds https://api.nuget.org/v3/index.json --workloads android,maui-android,not-a-workload 2>&1)"; rc=$?
+echo "$run1" | sed 's/^/     | /'
+check "exit code"            "0" "$rc"
+check "SDK picked (newest in folder, not the pinned one)" "SDK $SDKV (band 11.0.100-rc.1) in $root/.dotnet" "$(echo "$run1" | grep '^SDK ')"
+check "ios manifest placed"  "26.5.12194-net11-rc.1" "$(ls .dotnet/sdk-manifests/11.0.100-rc.1/microsoft.net.sdk.ios)"
+check "older ios manifest version replaced (update)" "1" "$(ls .dotnet/sdk-manifests/11.0.100-rc.1/microsoft.net.sdk.ios | wc -l | tr -d ' ')"
+check "ios manifest files"   "WorkloadManifest.json WorkloadManifest.targets" "$(ls .dotnet/sdk-manifests/11.0.100-rc.1/microsoft.net.sdk.ios/*/ | grep -v Dependencies | tr '\n' ' ' | sed 's/ $//')"
+check "android manifest placed" "37.0.0-rc.1.2257" "$(ls .dotnet/sdk-manifests/11.0.100-rc.1/microsoft.net.sdk.android)"
+check "maui manifest placed" "11.0.0-rc.1.26451.6" "$(ls .dotnet/sdk-manifests/11.0.100-rc.1/microsoft.net.sdk.maui)"
+check "toolchain manifest placed" "11.0.100-rc.1.26425.128" "$(ls .dotnet/sdk-manifests/11.0.100-rc.1/microsoft.net.workload.mono.toolchain.current)"
+check "unknown manifest reported" "1" "$(echo "$run1" | grep -c 'not.a.real.manifest: no not.a.real.manifest.manifest-11.0.100-rc.1 on any feed')"
+check "stale baseline untouched" "26.5.11720-net11-p6" "$(ls .dotnet/sdk-manifests/11.0.100-preview.6/microsoft.net.sdk.ios)"
+check "install state pin removed" "0" "$(ls .dotnet/metadata/workloads/11.0.100-rc.1/InstallState 2>/dev/null | wc -l | tr -d ' ')"
+check "net10 compat manifest is public already (no patch line)" "0" "$(echo "$run1" | grep -c 'compat manifest')"
+check "net10 compat packs all at the newest public runtime" "$(newest_public_runtime 10)" "$(python3 -I -c 'import json,sys; print(" ".join(sorted({p["version"] for p in json.load(open(sys.argv[1]))["packs"].values()})))' .dotnet/sdk-manifests/11.0.100-rc.1/microsoft.net.workload.mono.toolchain.net10/*/WorkloadManifest.json)"
+check "workload install call" "workload install android maui-android --skip-manifest-update --skip-sign-check --source https://api.nuget.org/v3/index.json" "$(grep -o 'workload install.*' "$FAKE_LOG")"
+check "workload no manifest defines is skipped" "1" "$(echo "$run1" | grep -c 'workload not-a-workload: no manifest of band 11.0.100-rc.1 defines it, skipped')"
+check "dotnet ran outside the repo dir" "0" "$(grep -c "^$root ::" "$FAKE_LOG")"
+check "workload clean + list called" "2" "$(grep -c 'workload clean\|workload list' "$FAKE_LOG")"
+check "build servers shut down after a refresh" "1" "$(grep -c 'build-server shutdown' "$FAKE_LOG")"
+check "global.json re-pinned" "$SDKV" "$(grep -o '11\.0\.100[^"]*' global.json | head -1)"
+check "global.json relative path" '"paths": [ ".dotnet", "$host$" ],' "$(grep paths global.json | sed 's/^ *//')"
+check "old SDK not pruned without --prune" "2" "$(ls .dotnet/sdk | wc -l | tr -d ' ')"
+check "workload command hint" "1" "$(echo "$run1" | grep -c "use $root/.dotnet/dotnet workload list")"
+
+echo "== second run: idempotent, --manifests-only, --no-global-json, --prune"
+rm -f global.json; : > "$FAKE_LOG"
+run2="$("$SCRIPT" --skip-sdk --no-default-feeds --maui-branch none --feeds https://api.nuget.org/v3/index.json --manifests-only --no-global-json --prune 2>&1)"; rc=$?
+check "exit code"            "0" "$rc"
+check "manifests present, not re-downloaded" "5" "$(echo "$run2" | grep -c '(present)')"
+check "no dotnet call"       "0" "$(wc -l < "$FAKE_LOG" | tr -d ' ')"
+run2b="$("$SCRIPT" --skip-sdk --no-default-feeds --maui-branch none --feeds https://api.nuget.org/v3/index.json --no-global-json 2>&1)"
+check "no workloads: hint instead of install" "1" "$(echo "$run2b" | grep -c 'No workloads requested (-w). Later: .*/.dotnet/dotnet workload install <id> --skip-manifest-update --skip-sign-check --source https://api.nuget.org/v3/index.json')"
+check "no workloads: still no dotnet call" "0" "$(wc -l < "$FAKE_LOG" | tr -d ' ')"
+check "no global.json"       "" "$(ls global.json 2>/dev/null)"
+check "pruned old sdk"       "$SDKV" "$(ls .dotnet/sdk)"
+check "pruned old runtime"   "11.0.0-rc.1.1" "$(ls .dotnet/shared/Microsoft.NETCore.App)"
+check "prune logged"         "2" "$(echo "$run2" | grep -c pruning)"
+
+echo "== update: a newer SDK appears in the folder"
+NEWV="11.0.100-rc.1.26470.101"
+mkdir -p ".dotnet/sdk/$NEWV" && cp ".dotnet/sdk/$SDKV/KnownWorkloadManifests.txt" ".dotnet/sdk/$NEWV/"
+run2c="$("$SCRIPT" --skip-sdk --no-default-feeds --maui-branch none --feeds https://api.nuget.org/v3/index.json --manifests-only --prune 2>&1)"; rc=$?
+check "exit code"            "0" "$rc"
+check "newer SDK picked"     "SDK $NEWV (band 11.0.100-rc.1) in $root/.dotnet" "$(echo "$run2c" | grep '^SDK ')"
+check "same band: manifests kept" "5" "$(echo "$run2c" | grep -c '(present)')"
+check "older SDK pruned"     "$NEWV" "$(ls .dotnet/sdk)"
+check "global.json re-pinned to the newer SDK" "$NEWV" "$(grep -o '11\.0\.100[^"]*' global.json | head -1)"
+SDKV="$NEWV"
+
+echo "== --dir outside cwd, --compat-runtime override"
+other="$(mktemp -d)"; mkdir -p "$other/sdk/$SDKV" && cp .dotnet/dotnet "$other/dotnet" && printf 'Microsoft.NET.Workload.Mono.ToolChain.net10\n' > "$other/sdk/$SDKV/KnownWorkloadManifests.txt"
+run3="$("$SCRIPT" --skip-sdk --dir "$other" --no-default-feeds --maui-branch none --feeds https://api.nuget.org/v3/index.json --manifests-only --compat-runtime 10.0.5 2>&1)"; rc=$?
+check "exit code"            "0" "$rc"
+check "compat override applied" "1" "$(echo "$run3" | grep -c -- '-> 10.0.5')"
+check "global.json absolute path" "\"paths\": [ \"$other\", \"\$host\$\" ]," "$(grep paths global.json | sed 's/^ *//')"
+rm -rf "${other:?}"
+
+echo "== feeds from dotnet/maui's NuGet.config, branch derived from the band (network: GitHub)"
+run4="$("$SCRIPT" --skip-sdk --no-default-feeds --manifests-only --no-global-json --maui-branch release/11.0.1xx-rc2 2>&1 | sed -n '/^Feeds:/,/^Manifests (/p')"
+echo "$run4" | sed 's/^/     | /'
+check "darc-pub macios feed found" "1" "$(echo "$run4" | grep -c 'darc-pub-dotnet-macios')"
+check "dotnet11 feed found via NuGet.config" "1" "$(echo "$run4" | grep -c '/dotnet11/nuget')"
+check "no dotnet10 feed" "0" "$(echo "$run4" | grep -c '/dotnet10')"
+run5="$("$SCRIPT" --skip-sdk --manifests-only --no-global-json 2>&1)"; rc=$?
+check "auto branch (release/11.0.1xx-rc1) + default feed: exit code" "0" "$rc"
+check "auto branch: dotnet11 default feed present" "1" "$(echo "$run5" | sed -n '/^Feeds:/,/^Manifests (/p' | grep -c '/dotnet11/nuget')"
+
+echo "== --list-workloads (manifests discovered on nuget.org, RC1 band, no SDK download)"
+wm="$(mktemp -d)"
+printf '{\n  // a comment\n  "workloads": {\n    "maui": { "packs": [ "a", ], },\n    "runtimes-x": { "abstract": true, },\n  },\n}\n' > "$wm/WorkloadManifest.json"
+check "manifest workload ids: comments, trailing commas, abstract skipped" "maui" "$(manifest_workloads "$wm/WorkloadManifest.json" | tr '\n' ' ' | sed 's/ $//')"
+rm -rf "${wm:?}"
+: > "$FAKE_LOG"
+run6="$("$SCRIPT" --list-workloads --version 11.0.100-rc.1.26425.128 --no-default-feeds --feeds https://api.nuget.org/v3/index.json --maui-branch none 2>&1)"; rc=$?
+echo "$run6" | sed 's/^/     | /'
+check "list-workloads: exit code" "0" "$rc"
+check "list-workloads: band from the version" "SDK 11.0.100-rc.1.26425.128 (band 11.0.100-rc.1)" "$(echo "$run6" | grep '^SDK ')"
+check "list-workloads: maui manifest found on nuget.org" "  microsoft.net.sdk.maui: 11.0.0-rc.1.26451.6  (nuget.org)" "$(echo "$run6" | grep '^  microsoft.net.sdk.maui:')"
+check "list-workloads: maui workloads listed" "1" "$(echo "$run6" | grep -A1 '^  microsoft.net.sdk.maui:' | tail -1 | grep -c -w 'maui')"
+check "list-workloads: toolchain workloads listed" "1" "$(echo "$run6" | grep -A1 '^  microsoft.net.workload.mono.toolchain.current:' | tail -1 | grep -c -w 'wasm-tools')"
+check "list-workloads: abstract-only manifest says so" "1" "$(echo "$run6" | grep -A1 '^  microsoft.net.workload.emscripten.current:' | tail -1 | grep -c 'abstract workloads only')"
+check "list-workloads: no dotnet call" "0" "$(wc -l < "$FAKE_LOG" | tr -d ' ')"
+run7="$("$SCRIPT" --list-workloads 2>&1)"; rc=$?
+check "list-workloads without a channel: exit 1" "1" "$rc"
+
+echo "== --clean"
+echo '{ "sdk": { "version": "x", "paths": [ ".dotnet", "$host$" ] } }' > global.json
+out="$("$SCRIPT" --clean 2>&1)"; rc=$?
+check "exit code"            "0" "$rc"
+check "folder removed"       "" "$(ls -d .dotnet 2>/dev/null)"
+check "global.json pointing at it removed" "" "$(ls global.json 2>/dev/null)"
+check "clean logs both"      "2" "$(echo "$out" | grep -c '^Removed ')"
+mkdir -p notdotnet/stuff; : > notdotnet/stuff/file
+out="$("$SCRIPT" --clean --dir notdotnet 2>&1)"; rc=$?
+check "refuses a folder that is not a .NET folder: exit 1" "1" "$rc"
+check "refuses: folder untouched" "file" "$(ls notdotnet/stuff)"
+mkdir -p other-sdk/sdk/1.0.0
+echo '{ "sdk": { "paths": [ ".elsewhere", "$host$" ] } }' > global.json
+out="$("$SCRIPT" --clean --dir other-sdk 2>&1)"; rc=$?
+check "clean by sdk/ marker: exit 0" "0" "$rc"
+check "unrelated global.json kept" "global.json" "$(ls global.json)"
+
+cd /; rm -rf "${root:?}"
+echo; echo "passed: $pass  failed: $fail"
+[ "$fail" = 0 ]
