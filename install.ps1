@@ -533,9 +533,10 @@ function Invoke-Main {
       Copy-Item -Path (Join-Path (Join-Path $extract 'data') '*') -Destination $dest -Recurse -Force
       $manifestsChanged = $true
     }
-    # manifest versions pinned by an earlier install would override the folders above
-    $pin = Join-Path $dirAbs "metadata/workloads/$band/InstallState/default.json"
-    if (Test-Path $pin) { Remove-Item -Force $pin }
+    # manifest versions pinned by an earlier install would override the folders above; the SDK keeps that pin under
+    # metadata/workloads/<ProcessArchitecture>/<band>/InstallState (Arm64, X64, ...), so glob over the architecture folder
+    $pins = Join-Path $dirAbs "metadata/workloads/*/$band/InstallState/default.json"
+    Remove-Item -Path $pins -Force -ErrorAction SilentlyContinue
 
     # ---- 4. Compat manifests of the previous major -------------------------------------------------------------------
     $compat = if ($CompatRuntime) { $CompatRuntime } else { Get-NewestPublicRuntime $prev }

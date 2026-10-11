@@ -420,8 +420,9 @@ main() {
     rm -rf "${target:?}" && mkdir -p "$target/$best" && cp -R "$work/data/." "$target/$best/"
     manifests_changed=1
   done < "$ids"
-  # manifest versions pinned by an earlier install would override the folders above
-  rm -f "$dir/metadata/workloads/$band/InstallState/default.json"
+  # manifest versions pinned by an earlier install would override the folders above; the SDK keeps that pin under
+  # metadata/workloads/<ProcessArchitecture>/<band>/InstallState (Arm64, X64, ...), so glob over the architecture folder
+  rm -f "$dir"/metadata/workloads/*/"$band"/InstallState/default.json
 
   # ---- 4. Compat manifests of the previous major ---------------------------------------------------------------------------
   [ -n "$compat_runtime" ] || compat_runtime="$(newest_public_runtime "$prev")"

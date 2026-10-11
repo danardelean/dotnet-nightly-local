@@ -88,8 +88,8 @@ printf 'Microsoft.NET.Sdk.Android\nMicrosoft.NET.Sdk.iOS\nMicrosoft.NET.Sdk.Maui
 # stale baseline manifest in an older band folder, as a daily SDK ships it
 mkdir -p .dotnet/sdk-manifests/11.0.100-preview.6/microsoft.net.sdk.ios/26.5.11720-net11-p6
 echo '{ "version": "26.5.11720-net11-p6" }' > .dotnet/sdk-manifests/11.0.100-preview.6/microsoft.net.sdk.ios/26.5.11720-net11-p6/WorkloadManifest.json
-# a pin left by an earlier install
-mkdir -p .dotnet/metadata/workloads/11.0.100-rc.1/InstallState && echo '{}' > .dotnet/metadata/workloads/11.0.100-rc.1/InstallState/default.json
+# pins left by an earlier install, where the SDK keeps them: metadata/workloads/<ProcessArchitecture>/<band>/InstallState
+for a in Arm64 X64; do mkdir -p ".dotnet/metadata/workloads/$a/11.0.100-rc.1/InstallState" && echo '{}' > ".dotnet/metadata/workloads/$a/11.0.100-rc.1/InstallState/default.json"; done
 # an older version of a manifest in the band folder, as a previous run leaves it: the update must replace it
 mkdir -p .dotnet/sdk-manifests/11.0.100-rc.1/microsoft.net.sdk.ios/26.5.12000-net11-rc.1
 echo '{ "version": "26.5.12000-net11-rc.1" }' > .dotnet/sdk-manifests/11.0.100-rc.1/microsoft.net.sdk.ios/26.5.12000-net11-rc.1/WorkloadManifest.json
@@ -116,7 +116,7 @@ check "maui manifest placed" "11.0.0-rc.1.26451.6" "$(ls .dotnet/sdk-manifests/1
 check "toolchain manifest placed" "11.0.100-rc.1.26425.128" "$(ls .dotnet/sdk-manifests/11.0.100-rc.1/microsoft.net.workload.mono.toolchain.current)"
 check "unknown manifest reported" "1" "$(echo "$run1" | grep -c 'not.a.real.manifest: no not.a.real.manifest.manifest-11.0.100-rc.1 on any feed')"
 check "stale baseline untouched" "26.5.11720-net11-p6" "$(ls .dotnet/sdk-manifests/11.0.100-preview.6/microsoft.net.sdk.ios)"
-check "install state pin removed" "0" "$(ls .dotnet/metadata/workloads/11.0.100-rc.1/InstallState 2>/dev/null | wc -l | tr -d ' ')"
+check "install state pins removed (every architecture folder)" "0" "$(find .dotnet/metadata/workloads -name default.json | wc -l | tr -d ' ')"
 check "net10 compat manifest is public already (no patch line)" "0" "$(echo "$run1" | grep -c 'compat manifest')"
 check "net10 compat packs all at the newest public runtime" "$(newest_public_runtime 10)" "$(python3 -I -c 'import json,sys; print(" ".join(sorted({p["version"] for p in json.load(open(sys.argv[1]))["packs"].values()})))' .dotnet/sdk-manifests/11.0.100-rc.1/microsoft.net.workload.mono.toolchain.net10/*/WorkloadManifest.json)"
 check "workload install call" "workload install android maui-android --skip-manifest-update --skip-sign-check --source https://api.nuget.org/v3/index.json" "$(grep -o 'workload install.*' "$FAKE_LOG")"

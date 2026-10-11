@@ -109,13 +109,15 @@ $root = PhysicalPath $root   # the script runs from $root and prints the paths i
 $dotnetDir = Join-Path $root '.dotnet'
 $SDKV = '11.0.100-rc.1.26451.107'
 foreach ($d in "sdk/$SDKV", 'sdk/11.0.100-preview.7.26380.1', 'shared/Microsoft.NETCore.App/11.0.0-rc.1.1', 'shared/Microsoft.NETCore.App/11.0.0-preview.7.1', 'host/fxr/11.0.0-rc.1.1',
-    'sdk-manifests/11.0.100-preview.6/microsoft.net.sdk.ios/26.5.11720-net11-p6', 'metadata/workloads/11.0.100-rc.1/InstallState') {
+    'sdk-manifests/11.0.100-preview.6/microsoft.net.sdk.ios/26.5.11720-net11-p6',
+    'metadata/workloads/Arm64/11.0.100-rc.1/InstallState', 'metadata/workloads/X64/11.0.100-rc.1/InstallState') {
   New-Item -ItemType Directory -Force -Path (Join-Path $dotnetDir $d) | Out-Null
 }
 Set-Content -Path (Join-Path $dotnetDir "sdk/$SDKV/KnownWorkloadManifests.txt") -Value "Microsoft.NET.Sdk.Android`nMicrosoft.NET.Sdk.iOS`nMicrosoft.NET.Sdk.Maui`nMicrosoft.NET.Workload.Mono.ToolChain.Current`nMicrosoft.NET.Workload.Mono.ToolChain.net10`nnot.a.real.manifest"
-# stale baseline manifest in an older band folder, as a daily SDK ships it; a pin left by an earlier install
+# stale baseline manifest in an older band folder, as a daily SDK ships it; pins left by an earlier install, where the
+# SDK keeps them: metadata/workloads/<ProcessArchitecture>/<band>/InstallState
 Set-Content -Path (Join-Path $dotnetDir 'sdk-manifests/11.0.100-preview.6/microsoft.net.sdk.ios/26.5.11720-net11-p6/WorkloadManifest.json') -Value '{ "version": "26.5.11720-net11-p6" }'
-Set-Content -Path (Join-Path $dotnetDir 'metadata/workloads/11.0.100-rc.1/InstallState/default.json') -Value '{}'
+foreach ($a in 'Arm64', 'X64') { Set-Content -Path (Join-Path $dotnetDir "metadata/workloads/$a/11.0.100-rc.1/InstallState/default.json") -Value '{}' }
 # an older version of a manifest in the band folder, as a previous run leaves it: the update must replace it
 New-Item -ItemType Directory -Force -Path (Join-Path $dotnetDir 'sdk-manifests/11.0.100-rc.1/microsoft.net.sdk.ios/26.5.12000-net11-rc.1') | Out-Null
 Set-Content -Path (Join-Path $dotnetDir 'sdk-manifests/11.0.100-rc.1/microsoft.net.sdk.ios/26.5.12000-net11-rc.1/WorkloadManifest.json') -Value '{ "version": "26.5.12000-net11-rc.1" }'
@@ -147,7 +149,7 @@ Check 'maui manifest placed' '11.0.0-rc.1.26451.6' ((Get-ChildItem (Join-Path $b
 Check 'toolchain manifest placed' '11.0.100-rc.1.26425.128' ((Get-ChildItem (Join-Path $bandDir 'microsoft.net.workload.mono.toolchain.current') -Directory | ForEach-Object Name) -join ' ')
 Check 'unknown manifest reported' '1' (CountMatching $run1.Lines 'not\.a\.real\.manifest: no not\.a\.real\.manifest\.manifest-11\.0\.100-rc\.1 on any feed')
 Check 'stale baseline untouched' '26.5.11720-net11-p6' ((Get-ChildItem (Join-Path $dotnetDir 'sdk-manifests/11.0.100-preview.6/microsoft.net.sdk.ios') -Directory | ForEach-Object Name) -join ' ')
-Check 'install state pin removed' $false (Test-Path (Join-Path $dotnetDir 'metadata/workloads/11.0.100-rc.1/InstallState/default.json'))
+Check 'install state pins removed (every architecture folder)' '0' @(Get-ChildItem (Join-Path $dotnetDir 'metadata/workloads') -Recurse -Filter 'default.json' -File).Count
 Check 'net10 compat manifest is public already (no patch line)' '0' (CountMatching $run1.Lines 'compat manifest')
 $net10 = Get-Content -Raw (Get-ChildItem (Join-Path $bandDir 'microsoft.net.workload.mono.toolchain.net10') -Recurse -Filter WorkloadManifest.json | Select-Object -First 1).FullName | ConvertFrom-Json
 Check 'net10 compat packs all at the newest public runtime' $newest10 (($net10.packs.PSObject.Properties.Value.version | Sort-Object -Unique) -join ' ')
