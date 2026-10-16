@@ -18,6 +18,7 @@ Results so far, October 9, 2026, macOS:
 | 8. `--list-workloads` | OK on both scripts: `12.0.1xx` (77 s, 13 feeds), `11.0.1xx-rc2` (46 s), `11.0.1xx` (26 s), `-c 11.0 -q preview` (RC1, 34 s); nuget.org's search does not return the manifest packages, so the ids an SDK knows are probed instead |
 | 7. .NET 12 lane (`12.0.1xx`) | OK in a clean folder: SDK `12.0.100-alpha.1.26509.101`, `ios 27.0.12277-net12-p1`, `android 37.99.0-preview.1.135`, `mobile-librarybuilder-net11`; console app runs, `dotnet new ios` and `dotnet new android` build (with a `NuGet.config` naming `dotnet12`). No `maui` manifest for the band. Four script changes on the way, listed in block 7 |
 | 4. Lane check | `11.0.1xx` = RTM branch, `11.0.1xx-rc2` = `26473.112` unchanged since Sept 23, `12.0.1xx` = alpha |
+| 11. After RC2 shipped (October 16, Linux, nuget.org only) | RC2 manifests on nuget.org: maui `11.0.0-rc.2.26505.5`, ios `27.0.12212-net11-rc.2`, android `37.2.0-rc.2.84`; `--list-workloads --version 11.0.100-rc.2.26504.105` against nuget.org alone lists 19 manifests in 12 s; the band's `mono.toolchain.net10` references `10.0.13`, public since October 13. The suites had one date-dependent failure (the RC1 manifest's public `10.0.12` was rewritten to `10.0.13`): the compat patch now applies only when the referenced runtime is not public; `test.sh` and `test.ps1` 107/0 on Linux (pwsh 7.5.3). aka.ms, ci.dot.net and dnceng were not reachable from that container, so no SDK download |
 
 ## 1. Update in place (macOS, the Maui.NativeStyles clone)
 

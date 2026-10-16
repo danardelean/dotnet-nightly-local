@@ -66,7 +66,8 @@ install.sh [options]
                             derived from the SDK band; "none" to skip)
   -f, --feeds LIST          extra NuGet v3 feeds to search for manifests and packs, comma-separated
       --no-default-feeds    do not search the default feeds: the dotnet<major> feed on dnceng and nuget.org
-      --compat-runtime VER  runtime version for the previous major's compat manifests (default: newest on nuget.org)
+      --compat-runtime VER  runtime version for the previous major's compat manifests (default: patch only when the
+                            referenced runtime is not on nuget.org yet, to the newest one that is)
       --no-global-json      do not write global.json in the current directory
       --skip-sdk            do not (re)install the SDK; use the newest one already in DIR
       --manifests-only      stop after placing the manifests (no workload install)
@@ -231,8 +232,9 @@ registry.
 
 3. **Compat manifests.** The `*-net<previous>` workloads (pulled in by `maui`, `ios`, `android`, `wasm-tools` so the
    new SDK can still build apps for the previous .NET) reference the previous runtime the SDK was built with, often a
-   servicing release that reaches nuget.org only on Patch Tuesday. The script points them at the newest public one. They
-   are not used when you build for the new .NET. It is a local edit of a throwaway SDK, and it is the one real hack here.
+   servicing release that reaches nuget.org only on Patch Tuesday. When the referenced runtime is not public yet, the
+   script points them at the newest one that is; a runtime that is on nuget.org is left alone. They are not used when
+   you build for the new .NET. It is a local edit of a throwaway SDK, and it is the one real hack here.
 
 4. **Packs.** `dotnet workload install <ids> --skip-manifest-update --skip-sign-check`, from the folder's own `dotnet`,
    with the same feeds plus nuget.org. `--skip-manifest-update` means "use exactly the manifests placed in step 2".
@@ -283,7 +285,7 @@ registry.
 ./test.ps1     # PowerShell 7
 ```
 
-About ninety checks each, the same list in both, that need no Microsoft download: the version-band and SemVer
+About a hundred checks each, the same list in both, that need no Microsoft download: the version-band and SemVer
 functions, the compat patch, end-to-end runs on a fake SDK folder (with a fake `dotnet` that logs its calls) using
 the real RC1-band manifests from nuget.org, an idempotent second run, an update with a newer SDK in the folder,
 `--prune`, `--clean`, and the feed discovery from dotnet/maui's `NuGet.config`. `test.sh` needs curl, unzip, perl,

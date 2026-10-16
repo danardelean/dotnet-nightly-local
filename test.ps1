@@ -100,6 +100,11 @@ $patched = Get-Content -Raw (Join-Path $m 'WorkloadManifest.json')
 Check 'patch applied'    '0' ([regex]::Matches($patched, '10\.0\.99').Count)
 Check 'patch count'      '3' ([regex]::Matches($patched, '10\.0\.12').Count)
 Check 'patch idempotent' '' (@(Update-CompatManifests $t 10 '10.0.12' 6>&1) -join '')
+$patchLog = @(Update-CompatManifests $t 10 '10.0.13' 6>&1 | ForEach-Object { "$_" })
+Check 'public runtime left alone (10.0.12 is older than 10.0.13)' '' ($patchLog -join "`n")
+Check 'public runtime still referenced' '3' ([regex]::Matches((Get-Content -Raw (Join-Path $m 'WorkloadManifest.json')), '10\.0\.12').Count)
+$patchLog = @(Update-CompatManifests $t 10 '10.0.13' -Force 6>&1 | ForEach-Object { "$_" })
+Check 'explicit version always applied' '  compat manifest microsoft.net.workload.mono.toolchain.net10: .NET 10.0.12 -> 10.0.13' ($patchLog -join "`n")
 Remove-Item -Recurse -Force $t
 
 Write-Host '== end to end on a fake SDK folder (manifests from nuget.org, RC1 band)'
@@ -152,7 +157,7 @@ Check 'stale baseline untouched' '26.5.11720-net11-p6' ((Get-ChildItem (Join-Pat
 Check 'install state pins removed (every architecture folder)' '0' @(Get-ChildItem (Join-Path $dotnetDir 'metadata/workloads') -Recurse -Filter 'default.json' -File).Count
 Check 'net10 compat manifest is public already (no patch line)' '0' (CountMatching $run1.Lines 'compat manifest')
 $net10 = Get-Content -Raw (Get-ChildItem (Join-Path $bandDir 'microsoft.net.workload.mono.toolchain.net10') -Recurse -Filter WorkloadManifest.json | Select-Object -First 1).FullName | ConvertFrom-Json
-Check 'net10 compat packs all at the newest public runtime' $newest10 (($net10.packs.PSObject.Properties.Value.version | Sort-Object -Unique) -join ' ')
+Check 'net10 compat packs left at the manifest''s own public runtime' '10.0.12' (($net10.packs.PSObject.Properties.Value.version | Sort-Object -Unique) -join ' ')
 $calls = @(Get-Content $fakeLog)
 Check 'workload install call' "workload install android maui-android --skip-manifest-update --skip-sign-check --source $nuget" (@($calls | Where-Object { $_ -match 'workload install' } | ForEach-Object { ($_ -split ' :: ', 2)[1] }) -join '')
 Check 'workload no manifest defines is skipped' '1' (CountMatching $run1.Lines 'workload not-a-workload: no manifest of band 11\.0\.100-rc\.1 defines it, skipped')

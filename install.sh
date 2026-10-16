@@ -29,7 +29,9 @@
 #                             packs the alpha's iOS and Android workloads still need); "none" to skip
 #   -f, --feeds LIST          extra NuGet v3 feeds to search for manifests and packs, comma-separated
 #       --no-default-feeds    do not search the default feeds: the dotnet<major> feed on dnceng and nuget.org
-#       --compat-runtime VER  runtime version for the previous major's compat manifests (default: newest on nuget.org)
+#       --compat-runtime VER  runtime version for the previous major's compat manifests. By default they are patched
+#                             only when the runtime they reference is not on nuget.org yet, to the newest one that is;
+#                             an explicit VER is always applied
 #       --no-global-json      do not write global.json in the current directory
 #       --skip-sdk            do not (re)install the SDK; use the newest one already in DIR
 #       --manifests-only      stop after placing the manifests (no workload install)
@@ -135,14 +137,20 @@ newest_public_runtime() {
   versions "$NUGET_ORG" microsoft.netcore.app.ref | { grep -E "^$1\.0\.[0-9]+\$" || true; } | sed 's/$/	/' | pick_highest | cut -f1
 }
 
-# The compat manifests of the previous major (*.net<PREV>) under DIR: point their <PREV>.0.x pack versions at VERSION
+# True when version A is newer than version B by SemVer precedence
+newer_than() { [ "$1" != "$2" ] && [ "$(printf '%s\t\n%s\t\n' "$1" "$2" | pick_highest | cut -f1)" = "$1" ]; }
+
+# The compat manifests of the previous major (*.net<PREV>) under DIR: point their <PREV>.0.x pack versions at VERSION.
+# VERSION is the newest public runtime, so a manifest is patched only when the runtime it references is newer than
+# that, i.e. not on nuget.org yet; with MODE "force" (an explicit --compat-runtime) any other version is replaced.
 patch_compat_manifests() {
-  local dir="${1:?}" prev="${2:?}" version="${3:?}" manifest current
+  local dir="${1:?}" prev="${2:?}" version="${3:?}" mode="${4:-auto}" manifest current
   for manifest in "$dir"/sdk-manifests/*/microsoft.net.workload.mono.toolchain.net"$prev"/*/WorkloadManifest.json \
                   "$dir"/sdk-manifests/*/microsoft.net.workload.emscripten.net"$prev"/*/WorkloadManifest.json; do
     [ -f "$manifest" ] || continue
     current="$(grep -o "\"version\" *: *\"$prev\.0\.[0-9]*\"" "$manifest" | head -1 | grep -o "$prev\.0\.[0-9]*" || true)"
-    if [ -n "$current" ] && [ "$current" != "$version" ]; then
+    [ -n "$current" ] && [ "$current" != "$version" ] || continue
+    if [ "$mode" = force ] || newer_than "$current" "$version"; then
       log "  compat manifest $(basename "$(dirname "$(dirname "$manifest")")"): .NET $current -> $version"
       perl -pi -e "s/\"\Q$current\E\"/\"$version\"/g" "$manifest"
     fi
@@ -425,8 +433,9 @@ main() {
   rm -f "$dir"/metadata/workloads/*/"$band"/InstallState/default.json
 
   # ---- 4. Compat manifests of the previous major ---------------------------------------------------------------------------
-  [ -n "$compat_runtime" ] || compat_runtime="$(newest_public_runtime "$prev")"
   if [ -n "$compat_runtime" ]; then
+    patch_compat_manifests "$dir" "$prev" "$compat_runtime" force
+  elif compat_runtime="$(newest_public_runtime "$prev")" && [ -n "$compat_runtime" ]; then
     patch_compat_manifests "$dir" "$prev" "$compat_runtime"
   else
     log "  (no public .NET $prev runtime found on nuget.org: compat manifests left as they are)"

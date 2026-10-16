@@ -57,7 +57,8 @@ Extra NuGet v3 feeds to search for manifests and packs, comma-separated.
 .PARAMETER NoDefaultFeeds
 Do not search the default feeds: the dotnet<major> feed on dnceng and nuget.org.
 .PARAMETER CompatRuntime
-Runtime version for the previous major's compat manifests (default: newest on nuget.org).
+Runtime version for the previous major's compat manifests. By default they are patched only when the runtime they
+reference is not on nuget.org yet, to the newest one that is; an explicit version is always applied.
 .PARAMETER NoGlobalJson
 Do not write global.json in the current directory.
 .PARAMETER SkipSdk
@@ -206,8 +207,10 @@ function Get-NewestPublicRuntime([int]$Major) {
   Select-HighestVersion @(Get-PackageVersions $NugetOrg 'microsoft.netcore.app.ref' | Where-Object { $_ -match "^$Major\.0\.\d+$" })
 }
 
-# The compat manifests of the previous major (*.net<PREV>) under DIR: point their <PREV>.0.x pack versions at VERSION
-function Update-CompatManifests([string]$InstallDir, [int]$Prev, [string]$RuntimeVersion) {
+# The compat manifests of the previous major (*.net<PREV>) under DIR: point their <PREV>.0.x pack versions at VERSION.
+# VERSION is the newest public runtime, so a manifest is patched only when the runtime it references is newer than
+# that, i.e. not on nuget.org yet; with -Force (an explicit -CompatRuntime) any other version is replaced.
+function Update-CompatManifests([string]$InstallDir, [int]$Prev, [string]$RuntimeVersion, [switch]$Force) {
   $manifestsRoot = Join-Path $InstallDir 'sdk-manifests'
   if (-not (Test-Path $manifestsRoot)) { return }
   foreach ($id in "microsoft.net.workload.mono.toolchain.net$Prev", "microsoft.net.workload.emscripten.net$Prev") {
@@ -216,7 +219,7 @@ function Update-CompatManifests([string]$InstallDir, [int]$Prev, [string]$Runtim
       $text = Get-Content -Raw -Path $manifest.FullName
       if ($text -match "`"version`"\s*:\s*`"($Prev\.0\.\d+)`"") {
         $current = $Matches[1]
-        if ($current -ne $RuntimeVersion) {
+        if ($current -ne $RuntimeVersion -and ($Force -or (Compare-Version $current $RuntimeVersion) -gt 0)) {
           Write-Log "  compat manifest ${id}: .NET $current -> $RuntimeVersion"
           $text = $text -replace ('"' + [regex]::Escape($current) + '"'), "`"$RuntimeVersion`""
           Set-Content -Path $manifest.FullName -Value $text -NoNewline -Encoding utf8
@@ -539,9 +542,12 @@ function Invoke-Main {
     Remove-Item -Path $pins -Force -ErrorAction SilentlyContinue
 
     # ---- 4. Compat manifests of the previous major -------------------------------------------------------------------
-    $compat = if ($CompatRuntime) { $CompatRuntime } else { Get-NewestPublicRuntime $prev }
-    if ($compat) { Update-CompatManifests $dirAbs $prev $compat }
-    else { Write-Log "  (no public .NET $prev runtime found on nuget.org: compat manifests left as they are)" }
+    if ($CompatRuntime) { Update-CompatManifests $dirAbs $prev $CompatRuntime -Force }
+    else {
+      $compat = Get-NewestPublicRuntime $prev
+      if ($compat) { Update-CompatManifests $dirAbs $prev $compat }
+      else { Write-Log "  (no public .NET $prev runtime found on nuget.org: compat manifests left as they are)" }
+    }
 
     # ---- 5. Packs ----------------------------------------------------------------------------------------------------
     if (-not $feedList.Contains($NugetOrg)) { $feedList.Add($NugetOrg) }   # packs of released runtimes and tools
